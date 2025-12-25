@@ -1,7 +1,10 @@
 import 'dart:io';
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
 import '../../data/models/vault_file.dart';
 
 enum VaultSortType {
@@ -14,7 +17,6 @@ enum VaultSortType {
   reset,
 }
 
-
 class VaultController extends ChangeNotifier {
   final ImagePicker _picker = ImagePicker();
 
@@ -23,7 +25,9 @@ class VaultController extends ChangeNotifier {
 
   bool _isImporting = false;
 
-  static const _dbKey = 'vault_files';
+  static const String _dbKey = 'vault_files';
+
+  // ================= GETTERS =================
 
   List<VaultFile> get files => List.unmodifiable(_files);
   List<VaultFile> get selectedFiles => List.unmodifiable(_selectedFiles);
@@ -35,6 +39,8 @@ class VaultController extends ChangeNotifier {
   int get selectedCount => _selectedFiles.length;
   int get totalFiles => _files.length;
 
+  // ================= IMPORT =================
+
   Future<void> importFromGallery({bool deleteOriginals = false}) async {
     if (_isImporting) return;
 
@@ -42,12 +48,15 @@ class VaultController extends ChangeNotifier {
       _isImporting = true;
       notifyListeners();
 
-      final List<XFile> picked = await _picker.pickMultipleMedia();
+      final picked = await _picker.pickMultipleMedia();
       if (picked.isEmpty) return;
 
       for (final x in picked) {
         final file = File(x.path);
         if (!file.existsSync()) continue;
+
+        // prevent duplicates
+        if (_files.any((f) => f.file.path == file.path)) continue;
 
         final isVideo = x.mimeType?.startsWith('video') ?? false;
 
@@ -56,8 +65,6 @@ class VaultController extends ChangeNotifier {
           importedAt: DateTime.now(),
           type: isVideo ? VaultFileType.video : VaultFileType.image,
         );
-
-        if (_files.contains(vaultFile)) continue;
 
         _files.add(vaultFile);
 
@@ -70,12 +77,14 @@ class VaultController extends ChangeNotifier {
 
       await saveFiles();
     } catch (e) {
-      debugPrint('Vault import error: $e');
+      debugPrint('❌ Vault import error: $e');
     } finally {
       _isImporting = false;
       notifyListeners();
     }
   }
+
+  // ================= SORT =================
 
   void sortFiles(VaultSortType type) {
     switch (type) {
@@ -115,15 +124,14 @@ class VaultController extends ChangeNotifier {
     notifyListeners();
   }
 
+  // ================= SELECTION =================
 
   bool isSelected(VaultFile file) => _selectedFiles.contains(file);
 
   void toggleSelection(VaultFile file) {
-    if (_selectedFiles.contains(file)) {
-      _selectedFiles.remove(file);
-    } else {
-      _selectedFiles.add(file);
-    }
+    _selectedFiles.contains(file)
+        ? _selectedFiles.remove(file)
+        : _selectedFiles.add(file);
     notifyListeners();
   }
 
@@ -138,6 +146,8 @@ class VaultController extends ChangeNotifier {
       ..addAll(_files);
     notifyListeners();
   }
+
+  // ================= DELETE =================
 
   void deleteSelected() {
     _files.removeWhere(_selectedFiles.contains);
@@ -160,71 +170,45 @@ class VaultController extends ChangeNotifier {
     notifyListeners();
   }
 
+  // ================= STORAGE =================
+
   Future<void> saveFiles() async {
     final prefs = await SharedPreferences.getInstance();
-    final fileJsons = _files.map((f) => _vaultFileToJson(f)).toList();
-    await prefs.setStringList(_dbKey, fileJsons);
+
+    final jsonList = _files.map((f) => f.toJson()).toList();
+
+    await prefs.setString(
+      _dbKey,
+      jsonEncode(jsonList),
+    );
+
+    debugPrint('✅ Vault saved: ${_files.length} files');
   }
 
   Future<void> loadFiles() async {
     final prefs = await SharedPreferences.getInstance();
-    final fileJsons = prefs.getStringList(_dbKey) ?? [];
-    _files.clear();
+    final raw = prefs.getString(_dbKey);
 
-    for (final jsonStr in fileJsons) {
-      try {
-        final f = _vaultFileFromJson(jsonStr);
-        if (f.file.existsSync()) {
-          _files.add(f);
-        }
-      } catch (_) {}
+    if (raw == null) return;
+
+    try {
+      final List decoded = jsonDecode(raw);
+
+      _files
+        ..clear()
+        ..addAll(
+          decoded
+              .map<VaultFile>((e) => VaultFile.fromJson(e))
+              .where((v) => v.file.existsSync()),
+        );
+
+      notifyListeners();
+    } catch (e) {
+      debugPrint('❌ Vault load error: $e');
     }
-
-    notifyListeners();
   }
 
-  String _vaultFileToJson(VaultFile f) {
-    return '{'
-        '"path":"${f.file.path}",'
-        '"importedAt":${f.importedAt.millisecondsSinceEpoch},'
-        '"type":"${f.type.name}",'
-        '"thumbnailPath":${f.thumbnailPath != null ? '"${f.thumbnailPath}"' : 'null'}'
-        '}';
-  }
-
-  VaultFile _vaultFileFromJson(String jsonStr) {
-    final map = _parseJson(jsonStr);
-
-    return VaultFile(
-      file: File(map['path'] as String),
-      importedAt:
-      DateTime.fromMillisecondsSinceEpoch(map['importedAt'] as int),
-      type: (map['type'] as String) == 'video'
-          ? VaultFileType.video
-          : VaultFileType.image,
-      thumbnailPath: map['thumbnailPath'] as String?,
-    );
-  }
-
-  Map<String, dynamic> _parseJson(String jsonStr) {
-    final map = <String, dynamic>{};
-    final regex = RegExp(r'"(\w+)":(null|"[^"]*"|\d+)');
-
-    for (final match in regex.allMatches(jsonStr)) {
-      final key = match.group(1)!;
-      final value = match.group(2)!;
-
-      if (value == 'null') {
-        map[key] = null;
-      } else if (value.startsWith('"')) {
-        map[key] = value.substring(1, value.length - 1);
-      } else {
-        map[key] = int.parse(value);
-      }
-    }
-
-    return map;
-  }
+  // ================= INIT =================
 
   VaultController() {
     loadFiles();

@@ -7,14 +7,15 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../../data/models/album_model.dart';
 import '../../data/models/album_media_file.dart';
+import '../../../data/models/vault_file.dart'; // ✅ REQUIRED
 
 import 'widgets/album_media_tile.dart';
 import '../viewer/album_viewer/album_image_viewer.dart';
 import '../viewer/album_viewer/album_video_viewer.dart';
 import 'utils/album_video_thumbnail_helper.dart';
 
-// ⬇️ NEW (Vault picker)
 import '../albums/pickers/vault_picker_screen.dart';
+
 
 class AlbumDetailScreen extends StatefulWidget {
   final Album album;
@@ -80,6 +81,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
       }
     }
   }
+
 
   Future<void> _saveMedia() async {
     final prefs = await SharedPreferences.getInstance();
@@ -236,7 +238,8 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
   // ================= PICK FROM VAULT =================
 
   Future<void> _pickFromVault() async {
-    final List<File>? selectedFiles = await showModalBottomSheet<List<File>>(
+    final List<VaultFile>? selectedVaultFiles =
+    await showModalBottomSheet<List<VaultFile>>(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
@@ -247,25 +250,38 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
       },
     );
 
-    if (selectedFiles == null || selectedFiles.isEmpty) return;
+    if (selectedVaultFiles == null || selectedVaultFiles.isEmpty) return;
+
+    final List<AlbumMediaFile> newMedia = selectedVaultFiles
+        .where((vaultFile) {
+      // prevent duplicates
+      return !mediaFiles.any(
+            (m) => m.file.path == vaultFile.file.path,
+      );
+    })
+        .map<AlbumMediaFile>((vaultFile) {
+      return AlbumMediaFile(
+        file: vaultFile.file,
+        type: vaultFile.type == VaultFileType.video
+            ? AlbumMediaType.video
+            : AlbumMediaType.image,
+        importedAt: DateTime.now(),
+        thumbnailPath: vaultFile.thumbnailPath,
+      );
+    })
+        .toList();
+
+    if (newMedia.isEmpty) return;
 
     setState(() {
-      mediaFiles.addAll(
-        selectedFiles.map(
-              (file) => AlbumMediaFile(
-            file: file,
-            type: _isVideo(file)
-                ? AlbumMediaType.video
-                : AlbumMediaType.image,
-            importedAt: DateTime.now(),
-          ),
-        ),
-      );
+      mediaFiles.addAll(newMedia); // ✅ now correct type
     });
 
     await _generateMissingThumbnails();
     await _saveMedia();
   }
+
+
 
 
 
