@@ -1,0 +1,173 @@
+import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+
+import 'vault_controller.dart';
+import 'vault_import_sheet.dart';
+import 'empty_vault_view.dart';
+
+// UI
+import 'widgets/vault_top_bar.dart';
+import 'widgets/vault_grid.dart';
+import 'widgets/vault_selection_bar.dart';
+
+class VaultScreen extends StatefulWidget {
+  const VaultScreen({super.key});
+
+  @override
+  State<VaultScreen> createState() => _VaultScreenState();
+}
+
+class _VaultScreenState extends State<VaultScreen> {
+  bool hasSkippedEmpty = false;
+  VaultController? _controller;
+
+  @override
+  void initState() {
+    super.initState();
+
+    /// 🔥 LISTEN TO VAULT CHANGES (THE REAL FIX)
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final controller = context.read<VaultController>();
+      _controller = controller;
+
+      controller.addListener(_onVaultChanged);
+    });
+  }
+
+  void _onVaultChanged() {
+    /// 🔥 WHEN FILES ARRIVE → EXIT EMPTY STATE
+    if (_controller!.files.isNotEmpty && hasSkippedEmpty) {
+      setState(() {
+        hasSkippedEmpty = false;
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller?.removeListener(_onVaultChanged);
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final controller = context.watch<VaultController>();
+
+    return Scaffold(
+      extendBody: true,
+      backgroundColor: Colors.transparent,
+
+      floatingActionButton:
+      (!controller.isSelectionMode &&
+          (hasSkippedEmpty || controller.files.isNotEmpty))
+          ? FloatingActionButton.extended(
+        onPressed: () => _openImportSheet(context),
+        backgroundColor: const Color(0xFF0FB9B1),
+        icon: const Icon(Icons.add),
+        label: const Text('Import'),
+      )
+          : null,
+
+      body: Container(
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [
+              Color(0xFF050B18),
+              Color(0xFF0FB9B1),
+            ],
+          ),
+        ),
+        child: SafeArea(
+          child: _buildBody(context, controller),
+        ),
+      ),
+    );
+  }
+
+  // ================= BODY =================
+
+  Widget _buildBody(BuildContext context, VaultController controller) {
+    if (!hasSkippedEmpty && controller.isEmpty) {
+      return EmptyVaultView(
+        onImport: () => _openImportSheet(context),
+        onSkip: () {
+          setState(() => hasSkippedEmpty = true);
+        },
+      );
+    }
+
+    return Stack(
+      children: [
+        Column(
+          children: [
+            VaultTopBar(controller: controller),
+            Expanded(
+              child: Padding(
+                padding: EdgeInsets.only(
+                  bottom: controller.isSelectionMode ? 110 : 0,
+                ),
+                child: controller.isEmpty
+                    ? _emptyText()
+                    : VaultGrid(controller: controller),
+              ),
+            ),
+          ],
+        ),
+        const Align(
+          alignment: Alignment.bottomCenter,
+          child: VaultSelectionBar(),
+        ),
+      ],
+    );
+  }
+
+  // ================= IMPORT =================
+
+  void _openImportSheet(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => VaultImportSheet(
+        controller: context.read<VaultController>(),
+      ),
+    );
+  }
+
+  // ================= EMPTY =================
+
+  Widget _emptyText() {
+    final size = MediaQuery.of(context).size;
+
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Image.asset(
+            'assets/icons/vault_empty.png',
+            width: size.width * 0.48,
+          ),
+          const SizedBox(height: 16),
+          const Text(
+            'No files in vault',
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 18,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(height: 6),
+          const Text(
+            'Import photos or videos to keep them secure',
+            style: TextStyle(
+              color: Colors.white60,
+              fontSize: 14,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
